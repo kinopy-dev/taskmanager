@@ -1,0 +1,112 @@
+// --- API設定情報 ---
+const JSONBIN_BIN_ID = 'YOUR_BIN_ID_HERE';    // JSONBinで作成したBin ID
+const JSONBIN_API_KEY = 'YOUR_API_KEY_HERE';  // JSONBinの Master Key
+const API_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
+
+const todayStr = new Date().toISOString().split('T')[0];
+const STORAGE_KEY = 'timeline_task_manager_data_v4';
+
+function shiftDate(baseDateStr, days) {
+    const d = new Date(baseDateStr);
+    d.setDate(d.getDate() + days);
+    return d.toISOString().split('T')[0];
+}
+
+const defaultData = [
+    {
+        "project_name": "A社 システム開発案件",
+        "note": "【クライアント要望】\n・納期厳守だが仕様変更の可能性あり。\n・担当の鈴木様は水曜定休。",
+        "is_completed": false,
+        "tasks": [
+            { "task_name": "要件定義", "start_date": shiftDate(todayStr, -5), "end_date": shiftDate(todayStr, -2), "is_completed": true, "priority": "medium" },
+            { "task_name": "見積もり作成", "start_date": shiftDate(todayStr, -2), "end_date": shiftDate(todayStr, 1), "is_completed": false, "priority": "high" },
+            { "task_name": "クライアントへ連絡", "start_date": shiftDate(todayStr, -1), "end_date": shiftDate(todayStr, 2), "is_completed": false, "priority": "low" }
+        ]
+    }
+];
+
+let projectData = [];
+let undoStack = [];
+const MAX_HISTORY = 30;
+
+// クラウドからのデータ読み込み
+async function loadFromCloud() {
+    try {
+        const res = await fetch(`${API_URL}/latest`, {
+            method: 'GET',
+            headers: { 'X-Master-Key': JSONBIN_API_KEY }
+        });
+        if (!res.ok) throw new Error('データ取得失敗');
+        const data = await res.json();
+        projectData = data.record || defaultData;
+        saveToLocalStorage();
+    } catch (e) {
+        console.warn('クラウド読み込み失敗。ローカルデータを使用します:', e);
+        loadFromLocalStorage();
+    }
+}
+
+// クラウドへのデータ保存
+async function saveToCloud() {
+    saveToLocalStorage(); // フォールバック用にローカル保存
+    try {
+        await fetch(API_URL, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Master-Key': JSONBIN_API_KEY
+            },
+            body: JSON.stringify(projectData)
+        });
+    } catch (e) {
+        console.error('クラウド保存失敗:', e);
+    }
+}
+
+function loadFromLocalStorage() {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+        try { projectData = JSON.parse(saved); } catch (e) { projectData = defaultData; }
+    } else { projectData = defaultData; }
+}
+
+function saveToLocalStorage() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(projectData));
+}
+
+function saveHistory() {
+    if (projectData.length > 0) {
+        undoStack.push(JSON.stringify(projectData));
+        if (undoStack.length > MAX_HISTORY) undoStack.shift();
+    }
+}
+
+function undo() {
+    if (undoStack.length === 0) return;
+    const previousState = undoStack.pop();
+    projectData = JSON.parse(previousState);
+    saveToCloud();
+    refreshUI();
+}
+
+async function initTimeline() {
+    await loadFromCloud();
+    
+    dateList = [];
+    for (let i = -DISPLAY_RANGE_BEFORE; i <= DISPLAY_RANGE_AFTER; i++) {
+        dateList.push(shiftDate(todayStr, i));
+    }
+    refreshUI();
+}
+
+function refreshUI() {
+    renderHeader();
+    renderRows();
+    updateTodayLine();
+    updateProjectSelects();
+    switchNote();
+    exportToTextArea();
+}
+
+// 変更を伴う操作（addProject, saveTaskAction, deleteTaskAction, saveNote 等）の内部処理で
+// `saveToLocalStorage();` を呼び出している箇所を `saveToCloud();` に変更してください。
