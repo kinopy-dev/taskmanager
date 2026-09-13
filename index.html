@@ -1,112 +1,963 @@
-// --- API設定情報 ---
-const JSONBIN_BIN_ID = 'YOUR_BIN_ID_HERE';    // JSONBinで作成したBin ID
-const JSONBIN_API_KEY = 'YOUR_API_KEY_HERE';  // JSONBinの Master Key
-const API_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>個人用タスク管理タイムライン（クラウド同期版）</title>
+    <style>
+        :root {
+            --bg-color: #f3f4f6;
+            --panel-bg: #ffffff;
+            --border-color: #e5e7eb;
+            --text-color: #1f2937;
+            --text-muted: #6b7280;
+            --success: #10b981;
+            --danger: #ef4444;
+            --completed: #9ca3af;
+            --completed-light: #f3f4f6;
+            --today-line: #ef4444;
+            --modal-bg: rgba(0, 0, 0, 0.4);
 
-const todayStr = new Date().toISOString().split('T')[0];
-const STORAGE_KEY = 'timeline_task_manager_data_v4';
+            --p-high-border: #ef4444;
+            --p-high-bg: #fee2e2;
+            --p-high-text: #b91c1c;
 
-function shiftDate(baseDateStr, days) {
-    const d = new Date(baseDateStr);
-    d.setDate(d.getDate() + days);
-    return d.toISOString().split('T')[0];
-}
+            --p-medium-border: #2563eb;
+            --p-medium-bg: #dbeafe;
+            --p-medium-text: #1d4ed8;
 
-const defaultData = [
-    {
-        "project_name": "A社 システム開発案件",
-        "note": "【クライアント要望】\n・納期厳守だが仕様変更の可能性あり。\n・担当の鈴木様は水曜定休。",
-        "is_completed": false,
-        "tasks": [
-            { "task_name": "要件定義", "start_date": shiftDate(todayStr, -5), "end_date": shiftDate(todayStr, -2), "is_completed": true, "priority": "medium" },
-            { "task_name": "見積もり作成", "start_date": shiftDate(todayStr, -2), "end_date": shiftDate(todayStr, 1), "is_completed": false, "priority": "high" },
-            { "task_name": "クライアントへ連絡", "start_date": shiftDate(todayStr, -1), "end_date": shiftDate(todayStr, 2), "is_completed": false, "priority": "low" }
-        ]
-    }
-];
+            --p-low-border: #10b981;
+            --p-low-bg: #d1fae5;
+            --p-low-text: #047857;
+        }
 
-let projectData = [];
-let undoStack = [];
-const MAX_HISTORY = 30;
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
 
-// クラウドからのデータ読み込み
-async function loadFromCloud() {
-    try {
-        const res = await fetch(`${API_URL}/latest`, {
-            method: 'GET',
-            headers: { 'X-Master-Key': JSONBIN_API_KEY }
-        });
-        if (!res.ok) throw new Error('データ取得失敗');
-        const data = await res.json();
-        projectData = data.record || defaultData;
-        saveToLocalStorage();
-    } catch (e) {
-        console.warn('クラウド読み込み失敗。ローカルデータを使用します:', e);
-        loadFromLocalStorage();
-    }
-}
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
 
-// クラウドへのデータ保存
-async function saveToCloud() {
-    saveToLocalStorage(); // フォールバック用にローカル保存
-    try {
-        await fetch(API_URL, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Master-Key': JSONBIN_API_KEY
-            },
-            body: JSON.stringify(projectData)
-        });
-    } catch (e) {
-        console.error('クラウド保存失敗:', e);
-    }
-}
+        header {
+            margin-bottom: 20px;
+        }
 
-function loadFromLocalStorage() {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-        try { projectData = JSON.parse(saved); } catch (e) { projectData = defaultData; }
-    } else { projectData = defaultData; }
-}
+        h1 {
+            font-size: 1.5rem;
+            margin: 0 0 10px 0;
+        }
 
-function saveToLocalStorage() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(projectData));
-}
+        .control-section {
+            background: var(--panel-bg);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 15px;
+        }
 
-function saveHistory() {
-    if (projectData.length > 0) {
-        undoStack.push(JSON.stringify(projectData));
-        if (undoStack.length > MAX_HISTORY) undoStack.shift();
-    }
-}
+        .form-group {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
 
-function undo() {
-    if (undoStack.length === 0) return;
-    const previousState = undoStack.pop();
-    projectData = JSON.parse(previousState);
-    saveToCloud();
-    refreshUI();
-}
+        input[type="text"], input[type="date"], select {
+            padding: 6px 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 0.9rem;
+            box-sizing: border-box;
+        }
 
-async function initTimeline() {
-    await loadFromCloud();
+        textarea {
+            width: 100%;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            box-sizing: border-box;
+            resize: vertical;
+        }
+
+        #json-io {
+            height: 80px;
+            font-family: monospace;
+            font-size: 0.85rem;
+            padding: 8px;
+        }
+
+        #project-note-area {
+            height: 180px;
+            padding: 12px;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            background-color: #fffbeb;
+            border: 1px solid #fde68a;
+            color: #1e293b;
+        }
+
+        #project-note-area:focus {
+            outline: none;
+            border-color: #f59e0b;
+            box-shadow: 0 0 0 2px #fef3c7;
+        }
+
+        .btn {
+            background-color: var(--p-medium-border);
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: bold;
+        }
+
+        .btn:hover { background-color: #1d4ed8; }
+        .btn-success { background-color: var(--success); }
+        .btn-success:hover { background-color: #059669; }
+        .btn-danger { background-color: var(--danger); }
+        .btn-danger:hover { background-color: #dc2626; }
+        .btn-secondary { background-color: #6b7280; }
+        .btn-secondary:hover { background-color: #4b5563; }
+
+        .timeline-board {
+            background: var(--panel-bg);
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            overflow-x: auto;
+            position: relative;
+            margin-bottom: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        th, td {
+            border: 1px solid var(--border-color);
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        th { height: 48px; }
+        td { vertical-align: top; }
+
+        th.project-col, td.project-col {
+            width: 250px;
+            min-width: 250px;
+            position: sticky;
+            left: 0;
+            background: var(--panel-bg);
+            z-index: 10;
+            padding: 8px;
+            border-right: 2px solid var(--border-color);
+            font-size: 0.9rem;
+        }
+
+        td.project-col { vertical-align: middle; }
+
+        .project-cell-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+        }
+
+        .btn-group-project {
+            display: flex;
+            gap: 4px;
+        }
+
+        .btn-icon {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 0.85rem;
+            padding: 4px 6px;
+            border-radius: 4px;
+        }
+
+        .btn-complete-project { color: var(--success); }
+        .btn-complete-project:hover { background-color: #d1fae5; }
+        .btn-delete-project { color: var(--text-muted); }
+        .btn-delete-project:hover { background-color: #fee2e2; color: var(--danger); }
+
+        th.date-col {
+            width: 60px;
+            min-width: 60px;
+            text-align: center;
+            font-size: 0.8rem;
+            background: #f9fafb;
+        }
+
+        th.date-col.today-hdr {
+            background: #fee2e2;
+            color: var(--today-line);
+            font-weight: bold;
+        }
+
+        .timeline-cell {
+            position: relative;
+            height: 100%;
+            width: 100%;
+        }
+
+        .task-bar {
+            position: absolute;
+            height: 32px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            padding: 0 8px;
+            display: flex;
+            align-items: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            z-index: 2;
+            box-sizing: border-box;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .task-bar.priority-high {
+            background-color: var(--p-high-bg);
+            border: 1px solid var(--p-high-border);
+            color: var(--p-high-text);
+        }
+        .task-bar.priority-medium {
+            background-color: var(--p-medium-bg);
+            border: 1px solid var(--p-medium-border);
+            color: var(--p-medium-text);
+        }
+        .task-bar.priority-low {
+            background-color: var(--p-low-bg);
+            border: 1px solid var(--p-low-border);
+            color: var(--p-low-text);
+        }
+
+        .task-bar.is-completed {
+            background-color: var(--completed-light) !important;
+            border-color: var(--completed) !important;
+            color: var(--text-muted) !important;
+            text-decoration: line-through;
+        }
+
+        .today-line-overlay {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background-color: var(--today-line);
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--modal-bg);
+            z-index: 100;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-content {
+            background-color: var(--panel-bg);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.15);
+            width: 400px;
+            max-width: 90%;
+        }
+
+        .modal-header {
+            font-weight: bold;
+            font-size: 1.1rem;
+            margin-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+        }
+
+        .modal-form-group {
+            margin-bottom: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .modal-buttons {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 20px;
+        }
+
+        .legend {
+            display: flex;
+            gap: 15px;
+            font-size: 0.85rem;
+            margin-top: 5px;
+            margin-bottom: 5px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+        }
+
+        .completed-project-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            background-color: var(--completed-light);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            margin-bottom: 8px;
+        }
+        .completed-project-title {
+            font-weight: bold;
+            color: var(--text-muted);
+            text-decoration: line-through;
+        }
+        .sync-status {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>個人用タスク管理タイムライン <span id="sync-status" class="sync-status">🔄 クラウド同期準備完了</span></h1>
+        <p style="margin:0 0 10px 0; font-size:0.9rem; color:var(--text-muted);">
+            縦の赤線（今日）に重なっているタスクが、現在手元に溜まっているタスクです。データは自動でクラウドに同期されます。
+        </p>
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div class="legend">
+                <div class="legend-item"><div class="legend-color" style="background: var(--p-high-bg); border: 1px solid var(--p-high-border);"></div> 優先度：高</div>
+                <div class="legend-item"><div class="legend-color" style="background: var(--p-medium-bg); border: 1px solid var(--p-medium-border);"></div> 優先度：中</div>
+                <div class="legend-item"><div class="legend-color" style="background: var(--p-low-bg); border: 1px solid var(--p-low-border);"></div> 優先度：低</div>
+            </div>
+            <div>
+                <button class="btn btn-secondary" onclick="initTimeline()" style="padding: 4px 10px; font-size: 0.8rem; margin-right: 5px;">🔄 手動再読み込み</button>
+                <button class="btn btn-secondary" onclick="undo()" id="undo-btn" style="padding: 4px 10px; font-size: 0.8rem;">↩️ 元に戻す (Ctrl+Z)</button>
+            </div>
+        </div>
+    </header>
+
+    <div class="control-section">
+        <span style="font-weight: bold;">➕ 新しい案件（プロジェクト）の追加</span>
+        <div class="form-group">
+            <input type="text" id="new-project-name" placeholder="案件名を入力（例：C社システム構築）" style="width: 300px;">
+            <button class="btn" onclick="addProject()">案件を追加</button>
+        </div>
+    </div>
+
+    <div class="control-section">
+        <span style="font-weight: bold;">📝 案件内タスクの追加</span>
+        <div class="form-group">
+            <select id="target-project-select">
+                <option value="">-- 追加対象の案件を選択 --</option>
+            </select>
+            <input type="text" id="new-task-name" placeholder="タスク名（例：見積もり作成）" style="width: 200px;">
+            
+            <select id="new-task-priority">
+                <option value="medium">優先度：中</option>
+                <option value="high">優先度：高</option>
+                <option value="low">優先度：低</option>
+            </select>
+
+            <label style="font-size:0.85rem; color:var(--text-muted);">開始:</label>
+            <input type="date" id="new-task-start">
+            <label style="font-size:0.85rem; color:var(--text-muted);">締切:</label>
+            <input type="date" id="new-task-end">
+            <button class="btn btn-success" onclick="addTask()">タスクを追加</button>
+        </div>
+    </div>
+
+    <div class="timeline-board" id="board-container">
+        <table id="timeline-table">
+            <thead>
+                <tr id="header-row">
+                    <th class="project-col">案件名</th>
+                </tr>
+            </thead>
+            <tbody id="data-rows">
+            </tbody>
+        </table>
+        <div id="today-vertical-line" class="today-line-overlay"></div>
+    </div>
+
+    <div class="control-section">
+        <details>
+            <summary style="font-weight: bold; font-size: 1.05rem; color: #4b5563; cursor: pointer; user-select: none;">📂 完了済み案件フォルダ</summary>
+            <div id="completed-projects-container" style="margin-top: 15px;">
+            </div>
+        </details>
+    </div>
+
+    <div class="control-section" style="border-left: 5px solid #f59e0b;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <span style="font-weight: bold; color: #1e293b;">📔 案件別ノート</span>
+            <div>
+                <label for="note-project-select" style="font-size: 0.9rem; font-weight: bold; margin-right: 5px;">表示する案件のノート:</label>
+                <select id="note-project-select" onchange="switchNote()">
+                </select>
+            </div>
+        </div>
+        <textarea id="project-note-area" oninput="saveNote()" placeholder="選択した案件に関するメモや打ち合わせ記録を自由に記入してください。フォーカスを外すと自動保存されます。"></textarea>
+    </div>
+
+    <details class="control-section">
+        <summary>バックアップ / JSONデータ表示</summary>
+        <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 10px;">
+            <textarea id="json-io" readonly></textarea>
+        </div>
+    </details>
+</div>
+
+<div id="edit-modal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">🛠️ タスクの編集・削除</div>
+        <div class="modal-form-group">
+            <label style="font-size:0.85rem; font-weight:bold;">タスク名</label>
+            <input type="text" id="edit-task-name">
+        </div>
+        <div class="modal-form-group">
+            <label style="font-size:0.85rem; font-weight:bold;">優先度</label>
+            <select id="edit-task-priority">
+                <option value="high">優先度：高</option>
+                <option value="medium">優先度：中</option>
+                <option value="low">優先度：低</option>
+            </select>
+        </div>
+        <div class="modal-form-group">
+            <label style="font-size:0.85rem; font-weight:bold;">開始日</label>
+            <input type="date" id="edit-task-start">
+        </div>
+        <div class="modal-form-group">
+            <label style="font-size:0.85rem; font-weight:bold;">締切日</label>
+            <input type="date" id="edit-task-end">
+        </div>
+        <div class="modal-form-group" style="flex-direction: row; align-items: center; margin-top: 8px;">
+            <input type="checkbox" id="edit-task-completed" style="width:16px; height:16px; cursor:pointer;">
+            <label for="edit-task-completed" style="font-size:0.9rem; font-weight:bold; cursor:pointer; user-select:none;">このタスクを完了とする</label>
+        </div>
+        <div class="modal-buttons">
+            <button class="btn btn-danger" onclick="deleteTaskAction()" style="margin-right: auto;">🗑️ タスクを削除</button>
+            <button class="btn btn-secondary" onclick="closeModal()">キャンセル</button>
+            <button class="btn btn-success" onclick="saveTaskAction()">変更を保存</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ▼ Step 1で取得したID・Keyに書き換えてください ▼
+    const JSONBIN_BIN_ID = 6aa5f2d8ac6210605ac657a2;
+    const JSONBIN_API_KEY = $2a$10$/Y4cIla3wGX1HUFEuyQCPOMBUAjWoexD9UsTTmqJZE1KcRHja254C;
+    const API_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const STORAGE_KEY = 'timeline_task_manager_data_v4';
     
-    dateList = [];
-    for (let i = -DISPLAY_RANGE_BEFORE; i <= DISPLAY_RANGE_AFTER; i++) {
-        dateList.push(shiftDate(todayStr, i));
+    function shiftDate(baseDateStr, days) {
+        const d = new Date(baseDateStr);
+        d.setDate(d.getDate() + days);
+        return d.toISOString().split('T')[0];
     }
-    refreshUI();
-}
 
-function refreshUI() {
-    renderHeader();
-    renderRows();
-    updateTodayLine();
-    updateProjectSelects();
-    switchNote();
-    exportToTextArea();
-}
+    const defaultData = [
+        {
+            "project_name": "A社 システム開発案件",
+            "note": "【クライアント要望】\n・納期厳守だが仕様変更の可能性あり。\n・担当の鈴木様は水曜定休。",
+            "is_completed": false,
+            "tasks": [
+                { "task_name": "要件定義", "start_date": shiftDate(todayStr, -5), "end_date": shiftDate(todayStr, -2), "is_completed": true, "priority": "medium" },
+                { "task_name": "見積もり作成", "start_date": shiftDate(todayStr, -2), "end_date": shiftDate(todayStr, 1), "is_completed": false, "priority": "high" },
+                { "task_name": "クライアントへ連絡", "start_date": shiftDate(todayStr, -1), "end_date": shiftDate(todayStr, 2), "is_completed": false, "priority": "low" }
+            ]
+        }
+    ];
 
-// 変更を伴う操作（addProject, saveTaskAction, deleteTaskAction, saveNote 等）の内部処理で
-// `saveToLocalStorage();` を呼び出している箇所を `saveToCloud();` に変更してください。
+    let projectData = [];
+    let undoStack = [];
+    const MAX_HISTORY = 30;
+
+    function setSyncStatus(msg) {
+        document.getElementById('sync-status').textContent = msg;
+    }
+
+    async function loadFromCloud() {
+        setSyncStatus('🔄 データを同期中...');
+        try {
+            const res = await fetch(`${API_URL}/latest`, {
+                method: 'GET',
+                headers: { 'X-Master-Key': JSONBIN_API_KEY }
+            });
+            if (!res.ok) throw new Error('データ取得失敗');
+            const data = await res.json();
+            if (Array.isArray(data.record) && data.record.length > 0) {
+                projectData = data.record;
+            } else if (Array.isArray(data.record)) {
+                projectData = [];
+            } else {
+                projectData = defaultData;
+            }
+            saveToLocalStorage();
+            setSyncStatus('✅ 同期済み');
+        } catch (e) {
+            console.warn('クラウド読み込み失敗。ローカルデータを使用します:', e);
+            loadFromLocalStorage();
+            setSyncStatus('⚠️ オフライン（ローカルデータ）');
+        }
+    }
+
+    async function saveToCloud() {
+        saveToLocalStorage();
+        setSyncStatus('⏳ クラウド保存中...');
+        try {
+            const res = await fetch(API_URL, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Master-Key': JSONBIN_API_KEY
+                },
+                body: JSON.stringify(projectData)
+            });
+            if (!res.ok) throw new Error('保存失敗');
+            setSyncStatus('✅ クラウド保存完了');
+        } catch (e) {
+            console.error('クラウド保存失敗:', e);
+            setSyncStatus('❌ クラウド保存失敗');
+        }
+    }
+
+    function loadFromLocalStorage() {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+            try { projectData = JSON.parse(saved); } catch (e) { projectData = defaultData; }
+        } else { projectData = defaultData; }
+    }
+
+    function saveToLocalStorage() {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(projectData));
+    }
+
+    function saveHistory() {
+        if (projectData.length > 0) {
+            undoStack.push(JSON.stringify(projectData));
+            if (undoStack.length > MAX_HISTORY) undoStack.shift();
+        }
+    }
+
+    function undo() {
+        if (undoStack.length === 0) return;
+        const previousState = undoStack.pop();
+        projectData = JSON.parse(previousState);
+        saveToCloud();
+        refreshUI();
+    }
+
+    window.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+            if (document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+                e.preventDefault();
+                undo();
+            }
+        }
+    });
+
+    const DISPLAY_RANGE_BEFORE = 15;
+    const DISPLAY_RANGE_AFTER = 15;
+    let dateList = [];
+    const cellWidth = 60; 
+    const projectColWidth = 250; 
+    let currentEditProjIdx = null;
+    let currentEditTaskIdx = null;
+
+    async function initTimeline() {
+        await loadFromCloud();
+        dateList = [];
+        for (let i = -DISPLAY_RANGE_BEFORE; i <= DISPLAY_RANGE_AFTER; i++) {
+            dateList.push(shiftDate(todayStr, i));
+        }
+        refreshUI();
+    }
+
+    function refreshUI() {
+        renderHeader();
+        renderRows();
+        updateTodayLine();
+        updateProjectSelects();
+        switchNote();
+        exportToTextArea();
+    }
+
+    function renderHeader() {
+        const headerRow = document.getElementById('header-row');
+        while (headerRow.children.length > 1) {
+            headerRow.removeChild(headerRow.lastChild);
+        }
+        dateList.forEach(date => {
+            const th = document.createElement('th');
+            th.className = 'date-col';
+            const d = new Date(date);
+            th.innerHTML = `${d.getMonth()+1}/${d.getDate()}`;
+            if (date === todayStr) {
+                th.classList.add('today-hdr');
+                th.innerHTML += '<br>(今日)';
+            }
+            headerRow.appendChild(th);
+        });
+    }
+
+    function calculateTaskLanes(tasks) {
+        let sortedTasks = tasks.map((t, idx) => ({ ...t, originalIdx: idx }));
+        let lanes = []; 
+        let taskLaneMap = {}; 
+        sortedTasks.forEach(task => {
+            let assignedLane = 0;
+            while (true) {
+                if (lanes[assignedLane] && task.start_date <= lanes[assignedLane]) {
+                    assignedLane++; 
+                } else { break; }
+            }
+            lanes[assignedLane] = task.end_date;
+            taskLaneMap[task.originalIdx] = assignedLane;
+        });
+        return { totalLanes: lanes.length > 0 ? lanes.length : 1, taskLaneMap: taskLaneMap };
+    }
+
+    function renderRows() {
+        const tbody = document.getElementById('data-rows');
+        const completedContainer = document.getElementById('completed-projects-container');
+        tbody.innerHTML = '';
+        completedContainer.innerHTML = '';
+        document.getElementById('undo-btn').disabled = (undoStack.length === 0);
+        let hasCompleted = false;
+
+        projectData.forEach((project, pIdx) => {
+            if (project.is_completed) {
+                hasCompleted = true;
+                const card = document.createElement('div');
+                card.className = 'completed-project-card';
+                const title = document.createElement('span');
+                title.className = 'completed-project-title';
+                title.textContent = `📁 ${project.project_name}`;
+                const btnGroup = document.createElement('div');
+                btnGroup.className = 'btn-group-project';
+
+                const restoreBtn = document.createElement('button');
+                restoreBtn.className = 'btn-icon';
+                restoreBtn.style.color = 'var(--primary)';
+                restoreBtn.innerHTML = '↩️ 進行中に戻す';
+                restoreBtn.onclick = () => restoreProject(pIdx);
+
+                const delBtn = document.createElement('button');
+                delBtn.className = 'btn-icon btn-delete-project';
+                delBtn.innerHTML = '🗑️ 消去';
+                delBtn.onclick = () => deleteProject(pIdx);
+
+                btnGroup.appendChild(restoreBtn);
+                btnGroup.appendChild(delBtn);
+                card.appendChild(title);
+                card.appendChild(btnGroup);
+                completedContainer.appendChild(card);
+                return;
+            }
+
+            const tr = document.createElement('tr');
+            const laneInfo = calculateTaskLanes(project.tasks);
+            const rowHeight = laneInfo.totalLanes * 40 + 8; 
+
+            const tdProj = document.createElement('td');
+            tdProj.className = 'project-col';
+            tdProj.style.height = `${rowHeight}px`; 
+            
+            const container = document.createElement('div');
+            container.className = 'project-cell-content';
+            const titleSpan = document.createElement('span');
+            titleSpan.textContent = project.project_name;
+            titleSpan.style.overflow = 'hidden';
+            titleSpan.style.textOverflow = 'ellipsis';
+            titleSpan.style.whiteSpace = 'nowrap';
+            
+            const btnGroup = document.createElement('div');
+            btnGroup.className = 'btn-group-project';
+
+            const completeBtn = document.createElement('button');
+            completeBtn.className = 'btn-icon btn-complete-project';
+            completeBtn.innerHTML = '✅ 完了';
+            completeBtn.onclick = () => completeProject(pIdx);
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'btn-icon btn-delete-project';
+            delBtn.innerHTML = '🗑️';
+            delBtn.onclick = () => deleteProject(pIdx);
+
+            btnGroup.appendChild(completeBtn);
+            btnGroup.appendChild(delBtn);
+            container.appendChild(titleSpan);
+            container.appendChild(btnGroup);
+            tdProj.appendChild(container);
+            tr.appendChild(tdProj);
+
+            dateList.forEach(date => {
+                const td = document.createElement('td');
+                td.style.height = `${rowHeight}px`;
+                if (date === dateList[0]) {
+                    td.className = 'timeline-cell';
+                    td.style.overflow = 'visible';
+                    project.tasks.forEach((task, tIdx) => {
+                        const startIdx = dateList.indexOf(task.start_date);
+                        const endIdx = dateList.indexOf(task.end_date);
+                        if (!(endIdx < 0 && startIdx < 0 && task.end_date < dateList[0] || task.start_date > dateList[dateList.length-1])) {
+                            const sIdx = startIdx >= 0 ? startIdx : 0;
+                            const eIdx = endIdx >= 0 ? endIdx : dateList.length - 1;
+                            const duration = eIdx - sIdx + 1;
+                            const leftPos = sIdx * cellWidth + 4;
+                            const widthPos = duration * cellWidth - 8;
+                            const laneNumber = laneInfo.taskLaneMap[tIdx] || 0;
+                            const topPos = laneNumber * 40 + 6;
+
+                            const bar = document.createElement('div');
+                            const priorityClass = task.priority ? `priority-${task.priority}` : 'priority-medium';
+                            bar.className = `task-bar ${priorityClass}`;
+                            if (task.is_completed) bar.classList.add('is-completed');
+                            bar.style.left = `${leftPos}px`;
+                            bar.style.width = `${widthPos}px`;
+                            bar.style.top = `${topPos}px`;
+                            bar.textContent = task.task_name;
+                            bar.onclick = (e) => {
+                                e.stopPropagation();
+                                openEditModal(pIdx, tIdx);
+                            };
+                            td.appendChild(bar);
+                        }
+                    });
+                }
+                tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
+
+        if (!hasCompleted) {
+            completedContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 0.9rem;">完了した案件はありません。</div>';
+        }
+    }
+
+    function updateTodayLine() {
+        const todayIdx = dateList.indexOf(todayStr);
+        const line = document.getElementById('today-vertical-line');
+        if (todayIdx >= 0) {
+            const leftPosition = projectColWidth + (todayIdx * cellWidth) + (cellWidth / 2);
+            line.style.left = `${leftPosition}px`;
+            line.style.display = 'block';
+        } else { line.style.display = 'none'; }
+    }
+
+    function updateProjectSelects() {
+        const taskSelect = document.getElementById('target-project-select');
+        const noteSelect = document.getElementById('note-project-select');
+        const currentNoteSelected = noteSelect.value;
+        taskSelect.innerHTML = '<option value="">-- 追加対象の案件を選択 --</option>';
+        noteSelect.innerHTML = '';
+
+        projectData.forEach((project, idx) => {
+            if (!project.is_completed) {
+                const optTask = document.createElement('option');
+                optTask.value = idx;
+                optTask.textContent = project.project_name;
+                taskSelect.appendChild(optTask);
+            }
+            const optNote = document.createElement('option');
+            optNote.value = idx;
+            optNote.textContent = project.is_completed ? `${project.project_name} (完了)` : project.project_name;
+            noteSelect.appendChild(optNote);
+        });
+
+        if (projectData[currentNoteSelected]) {
+            noteSelect.value = currentNoteSelected;
+        } else if (projectData.length > 0) {
+            noteSelect.value = 0;
+        }
+    }
+
+    function switchNote() {
+        const pIdx = document.getElementById('note-project-select').value;
+        const textarea = document.getElementById('project-note-area');
+        if (pIdx !== "" && projectData[pIdx]) {
+            textarea.value = projectData[pIdx].note || "";
+            textarea.disabled = false;
+        } else {
+            textarea.value = "案件が登録されていません。";
+            textarea.disabled = true;
+        }
+    }
+
+    function saveNote() {
+        const pIdx = document.getElementById('note-project-select').value;
+        const textarea = document.getElementById('project-note-area');
+        if (pIdx !== "" && projectData[pIdx]) {
+            projectData[pIdx].note = textarea.value;
+            saveToLocalStorage();
+            exportToTextArea();
+        }
+    }
+
+    document.getElementById('project-note-area').addEventListener('blur', function() {
+        saveToCloud();
+    });
+
+    function addProject() {
+        const input = document.getElementById('new-project-name');
+        const name = input.value.trim();
+        if (!name) { alert('案件名を入力してください。'); return; }
+        saveHistory();
+        projectData.push({ "project_name": name, "note": "", "is_completed": false, "tasks": [] });
+        input.value = '';
+        saveToCloud();
+        refreshUI();
+        document.getElementById('note-project-select').value = projectData.length - 1;
+        switchNote();
+    }
+
+    function completeProject(index) {
+        if (confirm(`案件「${projectData[index].project_name}」を完了済みにしますか？`)) {
+            saveHistory();
+            projectData[index].is_completed = true;
+            saveToCloud();
+            refreshUI();
+        }
+    }
+
+    function restoreProject(index) {
+        saveHistory();
+        projectData[index].is_completed = false;
+        saveToCloud();
+        refreshUI();
+    }
+
+    function deleteProject(index) {
+        if (confirm(`案件「${projectData[index].project_name}」を完全に削除しますか？`)) {
+            saveHistory();
+            projectData.splice(index, 1);
+            saveToCloud();
+            refreshUI();
+        }
+    }
+
+    function addTask() {
+        const pIdx = document.getElementById('target-project-select').value;
+        const taskName = document.getElementById('new-task-name').value.trim();
+        const priority = document.getElementById('new-task-priority').value;
+        const start = document.getElementById('new-task-start').value;
+        const end = document.getElementById('new-task-end').value;
+
+        if (pIdx === "") { alert('対象の案件を選択してください。'); return; }
+        if (!taskName) { alert('タスク名を入力してください。'); return; }
+        if (!start || !end) { alert('開始日と締切日を指定してください。'); return; }
+        if (start > end) { alert('開始日は締切日以前にしてください。'); return; }
+
+        saveHistory();
+        projectData[pIdx].tasks.push({
+            "task_name": taskName,
+            "start_date": start,
+            "end_date": end,
+            "is_completed": false,
+            "priority": priority
+        });
+
+        document.getElementById('new-task-name').value = '';
+        document.getElementById('new-task-start').value = '';
+        document.getElementById('new-task-end').value = '';
+
+        saveToCloud();
+        refreshUI();
+    }
+
+    function openEditModal(projIdx, taskIdx) {
+        currentEditProjIdx = projIdx;
+        currentEditTaskIdx = taskIdx;
+        const task = projectData[projIdx].tasks[taskIdx];
+
+        document.getElementById('edit-task-name').value = task.task_name;
+        document.getElementById('edit-task-priority').value = task.priority || 'medium';
+        document.getElementById('edit-task-start').value = task.start_date;
+        document.getElementById('edit-task-end').value = task.end_date;
+        document.getElementById('edit-task-completed').checked = task.is_completed;
+
+        document.getElementById('edit-modal').style.display = 'flex';
+    }
+
+    function closeModal() {
+        document.getElementById('edit-modal').style.display = 'none';
+        currentEditProjIdx = null;
+        currentEditTaskIdx = null;
+    }
+
+    function saveTaskAction() {
+        if (currentEditProjIdx === null || currentEditTaskIdx === null) return;
+        const newName = document.getElementById('edit-task-name').value.trim();
+        const newPriority = document.getElementById('edit-task-priority').value;
+        const newStart = document.getElementById('edit-task-start').value;
+        const newEnd = document.getElementById('edit-task-end').value;
+        const newCompleted = document.getElementById('edit-task-completed').checked;
+
+        if (!newName || !newStart || !newEnd || newStart > newEnd) {
+            alert('入力内容を確認してください。'); return;
+        }
+
+        saveHistory();
+        const task = projectData[currentEditProjIdx].tasks[currentEditTaskIdx];
+        task.task_name = newName;
+        task.priority = newPriority;
+        task.start_date = newStart;
+        task.end_date = newEnd;
+        task.is_completed = newCompleted;
+
+        closeModal();
+        saveToCloud();
+        refreshUI();
+    }
+
+    function deleteTaskAction() {
+        if (currentEditProjIdx === null || currentEditTaskIdx === null) return;
+        if (confirm('このタスクを削除しますか？')) {
+            saveHistory();
+            projectData[currentEditProjIdx].tasks.splice(currentEditTaskIdx, 1);
+            closeModal();
+            saveToCloud();
+            refreshUI();
+        }
+    }
+
+    function exportToTextArea() {
+        document.getElementById('json-io').value = JSON.stringify(projectData, null, 2);
+    }
+
+    window.onload = initTimeline;
+</script>
+</body>
+</html>
