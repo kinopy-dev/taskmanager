@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>個人用タスク管理タイムライン（クラウド同期版）</title>
+    <title>個人用タスク管理タイムライン（暗号化同期版）</title>
     <style>
         :root {
             --bg-color: #f3f4f6;
@@ -349,9 +349,9 @@
 
 <div class="container">
     <header>
-        <h1>個人用タスク管理タイムライン <span id="sync-status" class="sync-status">🔄 クラウド同期準備完了</span></h1>
+        <h1>個人用タスク管理タイムライン <span id="sync-status" class="sync-status">🔄 暗号化同期準備中</span></h1>
         <p style="margin:0 0 10px 0; font-size:0.9rem; color:var(--text-muted);">
-            縦の赤線（今日）に重なっているタスクが、現在手元に溜まっているタスクです。データは自動でクラウドに同期されます。
+            縦の赤線（今日）に重なっているタスクが手元のタスクです。データはパスワードで保護された状態でクラウドに保存されます。
         </p>
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div class="legend">
@@ -360,6 +360,7 @@
                 <div class="legend-item"><div class="legend-color" style="background: var(--p-low-bg); border: 1px solid var(--p-low-border);"></div> 優先度：低</div>
             </div>
             <div>
+                <button class="btn btn-secondary" onclick="resetPassword()" style="padding: 4px 10px; font-size: 0.8rem; margin-right: 5px;">🔑 パスワード再入力</button>
                 <button class="btn btn-secondary" onclick="resetApiConfig()" style="padding: 4px 10px; font-size: 0.8rem; margin-right: 5px;">⚙️ API設定変更</button>
                 <button class="btn btn-secondary" onclick="initTimeline()" style="padding: 4px 10px; font-size: 0.8rem; margin-right: 5px;">🔄 手動再読み込み</button>
                 <button class="btn btn-secondary" onclick="undo()" id="undo-btn" style="padding: 4px 10px; font-size: 0.8rem;">↩️ 元に戻す (Ctrl+Z)</button>
@@ -427,7 +428,7 @@
                 </select>
             </div>
         </div>
-        <textarea id="project-note-area" oninput="saveNote()" placeholder="選択した案件に関するメモや打ち合わせ記録を自由に記入してください。フォーカスを外すと自動保存されます。"></textarea>
+        <textarea id="project-note-area" oninput="saveNote()" placeholder="選択した案件に関するメモや打ち合わせ記録を記入してください。フォーカスを外すと自動保存されます。"></textarea>
     </div>
 
     <details class="control-section">
@@ -477,6 +478,95 @@
     const CONFIG_BIN_KEY = 'jsonbin_bin_id_config';
     const CONFIG_API_KEY = 'jsonbin_api_key_config';
     const STORAGE_KEY = 'timeline_task_manager_data_v4';
+    const PASS_SESSION_KEY = 'app_crypto_password';
+
+    // --- Web Crypto API による暗号化・復号モジュール ---
+    function bytesToBase64(bytes) {
+        let binary = '';
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+    }
+
+    function base64ToBytes(base64) {
+        const binaryString = atob(base64);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes;
+    }
+
+    async function getKey(password, salt) {
+        const enc = new TextEncoder();
+        const keyMaterial = await crypto.subtle.importKey(
+            'raw', enc.encode(password), { name: 'PBKDF2' }, false, ['deriveKey']
+        );
+        return crypto.subtle.deriveKey(
+            {
+                name: 'PBKDF2',
+                salt: salt,
+                iterations: 100000,
+                hash: 'SHA-256'
+            },
+            keyMaterial,
+            { name: 'AES-GCM', length: 256 },
+            false,
+            ['encrypt', 'decrypt']
+        );
+    }
+
+    async function encryptText(text, password) {
+        const enc = new TextEncoder();
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const key = await getKey(password, salt);
+        const encrypted = await crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv: iv },
+            key,
+            enc.encode(text)
+        );
+        return {
+            cipher: bytesToBase64(new Uint8Array(encrypted)),
+            salt: bytesToBase64(salt),
+            iv: bytesToBase64(iv)
+        };
+    }
+
+    async function decryptText(encryptedObj, password) {
+        const dec = new TextDecoder();
+        const salt = base64ToBytes(encryptedObj.salt);
+        const iv = base64ToBytes(encryptedObj.iv);
+        const cipher = base64ToBytes(encryptedObj.cipher);
+        const key = await getKey(password, salt);
+        const decrypted = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: iv },
+            key,
+            cipher
+        );
+        return dec.decode(decrypted);
+    }
+
+    // --- パスワードおよびAPI設定管理 ---
+    function getPassword() {
+        let pwd = sessionStorage.getItem(PASS_SESSION_KEY);
+        if (!pwd) {
+            pwd = prompt('タスクデータ復号用の【暗号化パスワード】を入力してください:');
+            if (pwd) {
+                sessionStorage.setItem(PASS_SESSION_KEY, pwd.trim());
+            }
+        }
+        return sessionStorage.getItem(PASS_SESSION_KEY);
+    }
+
+    function resetPassword() {
+        sessionStorage.removeItem(PASS_SESSION_KEY);
+        getPassword();
+        initTimeline();
+    }
 
     function getApiConfig() {
         let binId = localStorage.getItem(CONFIG_BIN_KEY);
@@ -542,7 +632,13 @@
             return;
         }
 
-        setSyncStatus('🔄 データを同期中...');
+        const password = getPassword();
+        if (!password) {
+            setSyncStatus('🔒 パスワード未入力（閲覧不可）');
+            return;
+        }
+
+        setSyncStatus('🔄 クラウドから復号同期中...');
         try {
             const url = 'https://api.jsonbin.io/v3/b/' + config.binId + '/latest';
             const res = await fetch(url, {
@@ -551,13 +647,30 @@
             });
             if (!res.ok) throw new Error('データ取得失敗');
             const data = await res.json();
-            if (Array.isArray(data.record)) {
-                projectData = data.record;
+            const record = data.record;
+
+            if (record && record.cipher && record.salt && record.iv) {
+                // 暗号化済みデータの解読
+                try {
+                    const decryptedJson = await decryptText(record, password);
+                    projectData = JSON.parse(decryptedJson);
+                    saveToLocalStorage();
+                    setSyncStatus('🔐 🔒 暗号化同期完了');
+                } catch (err) {
+                    alert('パスワードが正しくないため復号できませんでした。');
+                    sessionStorage.removeItem(PASS_SESSION_KEY);
+                    setSyncStatus('❌ 復号失敗（パスワード誤り）');
+                    return;
+                }
+            } else if (Array.isArray(record)) {
+                // 未暗号化の既存データ（移行用）
+                projectData = record.length > 0 ? record : defaultData;
+                saveToLocalStorage();
+                setSyncStatus('⚠️ 未暗号化データ読み込み（次回保存時に暗号化）');
             } else {
                 projectData = defaultData;
+                setSyncStatus('✅ 初期データ読み込み');
             }
-            saveToLocalStorage();
-            setSyncStatus('✅ 同期済み');
         } catch (e) {
             console.warn('クラウド読み込み失敗。ローカルデータを使用します:', e);
             loadFromLocalStorage();
@@ -570,8 +683,17 @@
         const config = getApiConfig();
         if (!config.binId || !config.apiKey) return;
 
-        setSyncStatus('⏳ クラウド保存中...');
+        const password = getPassword();
+        if (!password) {
+            alert('パスワードが指定されていないため保存できません。');
+            return;
+        }
+
+        setSyncStatus('⏳ 暗号化してクラウド保存中...');
         try {
+            const jsonText = JSON.stringify(projectData);
+            const encryptedPayload = await encryptText(jsonText, password);
+
             const url = 'https://api.jsonbin.io/v3/b/' + config.binId;
             const res = await fetch(url, {
                 method: 'PUT',
@@ -579,10 +701,10 @@
                     'Content-Type': 'application/json',
                     'X-Master-Key': config.apiKey
                 },
-                body: JSON.stringify(projectData)
+                body: JSON.stringify(encryptedPayload)
             });
             if (!res.ok) throw new Error('保存失敗');
-            setSyncStatus('✅ クラウド保存完了');
+            setSyncStatus('🔐 🔒 暗号化保存完了');
         } catch (e) {
             console.error('クラウド保存失敗:', e);
             setSyncStatus('❌ クラウド保存失敗');
