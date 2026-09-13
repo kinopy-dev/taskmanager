@@ -360,6 +360,7 @@
                 <div class="legend-item"><div class="legend-color" style="background: var(--p-low-bg); border: 1px solid var(--p-low-border);"></div> 優先度：低</div>
             </div>
             <div>
+                <button class="btn btn-secondary" onclick="resetApiConfig()" style="padding: 4px 10px; font-size: 0.8rem; margin-right: 5px;">⚙️ API設定変更</button>
                 <button class="btn btn-secondary" onclick="initTimeline()" style="padding: 4px 10px; font-size: 0.8rem; margin-right: 5px;">🔄 手動再読み込み</button>
                 <button class="btn btn-secondary" onclick="undo()" id="undo-btn" style="padding: 4px 10px; font-size: 0.8rem;">↩️ 元に戻す (Ctrl+Z)</button>
             </div>
@@ -473,14 +474,39 @@
 </div>
 
 <script>
-    // ▼ Step 1で取得したID・Keyに書き換えてください ▼
-    const JSONBIN_BIN_ID = 6aa5f2d8ac6210605ac657a2;
-    const JSONBIN_API_KEY = $2a$10$/Y4cIla3wGX1HUFEuyQCPOMBUAjWoexD9UsTTmqJZE1KcRHja254C;
-    const API_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
+    const CONFIG_BIN_KEY = 'jsonbin_bin_id_config';
+    const CONFIG_API_KEY = 'jsonbin_api_key_config';
+    const STORAGE_KEY = 'timeline_task_manager_data_v4';
+
+    function getApiConfig() {
+        let binId = localStorage.getItem(CONFIG_BIN_KEY);
+        let apiKey = localStorage.getItem(CONFIG_API_KEY);
+
+        if (!binId || !apiKey) {
+            binId = prompt('JSONBin.io の 【Bin ID】 を入力してください:');
+            apiKey = prompt('JSONBin.io の 【Master Key】 を入力してください:');
+            if (binId && apiKey) {
+                localStorage.setItem(CONFIG_BIN_KEY, binId.trim());
+                localStorage.setItem(CONFIG_API_KEY, apiKey.trim());
+            } else {
+                alert('API設定が不足しているため、ローカルモードで起動します。');
+            }
+        }
+        return {
+            binId: localStorage.getItem(CONFIG_BIN_KEY),
+            apiKey: localStorage.getItem(CONFIG_API_KEY)
+        };
+    }
+
+    function resetApiConfig() {
+        localStorage.removeItem(CONFIG_BIN_KEY);
+        localStorage.removeItem(CONFIG_API_KEY);
+        getApiConfig();
+        initTimeline();
+    }
 
     const todayStr = new Date().toISOString().split('T')[0];
-    const STORAGE_KEY = 'timeline_task_manager_data_v4';
-    
+
     function shiftDate(baseDateStr, days) {
         const d = new Date(baseDateStr);
         d.setDate(d.getDate() + days);
@@ -509,18 +535,24 @@
     }
 
     async function loadFromCloud() {
+        const config = getApiConfig();
+        if (!config.binId || !config.apiKey) {
+            loadFromLocalStorage();
+            setSyncStatus('⚠️ オフライン（ローカルデータ）');
+            return;
+        }
+
         setSyncStatus('🔄 データを同期中...');
         try {
-            const res = await fetch(`${API_URL}/latest`, {
+            const url = 'https://api.jsonbin.io/v3/b/' + config.binId + '/latest';
+            const res = await fetch(url, {
                 method: 'GET',
-                headers: { 'X-Master-Key': JSONBIN_API_KEY }
+                headers: { 'X-Master-Key': config.apiKey }
             });
             if (!res.ok) throw new Error('データ取得失敗');
             const data = await res.json();
-            if (Array.isArray(data.record) && data.record.length > 0) {
+            if (Array.isArray(data.record)) {
                 projectData = data.record;
-            } else if (Array.isArray(data.record)) {
-                projectData = [];
             } else {
                 projectData = defaultData;
             }
@@ -535,13 +567,17 @@
 
     async function saveToCloud() {
         saveToLocalStorage();
+        const config = getApiConfig();
+        if (!config.binId || !config.apiKey) return;
+
         setSyncStatus('⏳ クラウド保存中...');
         try {
-            const res = await fetch(API_URL, {
+            const url = 'https://api.jsonbin.io/v3/b/' + config.binId;
+            const res = await fetch(url, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-Master-Key': JSONBIN_API_KEY
+                    'X-Master-Key': config.apiKey
                 },
                 body: JSON.stringify(projectData)
             });
@@ -623,7 +659,7 @@
             const th = document.createElement('th');
             th.className = 'date-col';
             const d = new Date(date);
-            th.innerHTML = `${d.getMonth()+1}/${d.getDate()}`;
+            th.innerHTML = (d.getMonth() + 1) + '/' + d.getDate();
             if (date === todayStr) {
                 th.classList.add('today-hdr');
                 th.innerHTML += '<br>(今日)';
@@ -664,7 +700,7 @@
                 card.className = 'completed-project-card';
                 const title = document.createElement('span');
                 title.className = 'completed-project-title';
-                title.textContent = `📁 ${project.project_name}`;
+                title.textContent = '📁 ' + project.project_name;
                 const btnGroup = document.createElement('div');
                 btnGroup.className = 'btn-group-project';
 
@@ -693,7 +729,7 @@
 
             const tdProj = document.createElement('td');
             tdProj.className = 'project-col';
-            tdProj.style.height = `${rowHeight}px`; 
+            tdProj.style.height = rowHeight + 'px'; 
             
             const container = document.createElement('div');
             container.className = 'project-cell-content';
@@ -725,7 +761,7 @@
 
             dateList.forEach(date => {
                 const td = document.createElement('td');
-                td.style.height = `${rowHeight}px`;
+                td.style.height = rowHeight + 'px';
                 if (date === dateList[0]) {
                     td.className = 'timeline-cell';
                     td.style.overflow = 'visible';
@@ -742,12 +778,12 @@
                             const topPos = laneNumber * 40 + 6;
 
                             const bar = document.createElement('div');
-                            const priorityClass = task.priority ? `priority-${task.priority}` : 'priority-medium';
-                            bar.className = `task-bar ${priorityClass}`;
+                            const priorityClass = task.priority ? 'priority-' + task.priority : 'priority-medium';
+                            bar.className = 'task-bar ' + priorityClass;
                             if (task.is_completed) bar.classList.add('is-completed');
-                            bar.style.left = `${leftPos}px`;
-                            bar.style.width = `${widthPos}px`;
-                            bar.style.top = `${topPos}px`;
+                            bar.style.left = leftPos + 'px';
+                            bar.style.width = widthPos + 'px';
+                            bar.style.top = topPos + 'px';
                             bar.textContent = task.task_name;
                             bar.onclick = (e) => {
                                 e.stopPropagation();
@@ -772,7 +808,7 @@
         const line = document.getElementById('today-vertical-line');
         if (todayIdx >= 0) {
             const leftPosition = projectColWidth + (todayIdx * cellWidth) + (cellWidth / 2);
-            line.style.left = `${leftPosition}px`;
+            line.style.left = leftPosition + 'px';
             line.style.display = 'block';
         } else { line.style.display = 'none'; }
     }
@@ -793,7 +829,7 @@
             }
             const optNote = document.createElement('option');
             optNote.value = idx;
-            optNote.textContent = project.is_completed ? `${project.project_name} (完了)` : project.project_name;
+            optNote.textContent = project.is_completed ? project.project_name + ' (完了)' : project.project_name;
             noteSelect.appendChild(optNote);
         });
 
@@ -844,7 +880,7 @@
     }
 
     function completeProject(index) {
-        if (confirm(`案件「${projectData[index].project_name}」を完了済みにしますか？`)) {
+        if (confirm('案件「' + projectData[index].project_name + '」を完了済みにしますか？')) {
             saveHistory();
             projectData[index].is_completed = true;
             saveToCloud();
@@ -860,7 +896,7 @@
     }
 
     function deleteProject(index) {
-        if (confirm(`案件「${projectData[index].project_name}」を完全に削除しますか？`)) {
+        if (confirm('案件「' + projectData[index].project_name + '」を完全に削除しますか？')) {
             saveHistory();
             projectData.splice(index, 1);
             saveToCloud();
